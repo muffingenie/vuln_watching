@@ -88,8 +88,7 @@ def format_email_content(nvd, mitre, cisa):
     def format_section(title, items):
         if not items:
             return f"{title}: No news today.\n\n"
-        return f"{title}:\n" + "\n".join([f"- {item['id']} - {item['description']} ({item['link']})" for item in items]) + "\n\n"
-    
+        return f"{title}:\n" + "\n".join([f"- {item.get('id', 'N/A')} - {item.get('description', 'No description')} ({item.get('link', '#')})" for item in items]) + "\n\n"
     content = """
     Daily Vulnerability Report
     ==================================
