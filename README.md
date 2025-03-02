@@ -1,2 +1,2 @@
-# vuln_watching
-Receive each day news about new or updated vulnerabilities
+# Vuln Watcher
+Receive each day, in your inbox, news about new or updated vulnerabilities
