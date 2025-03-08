@@ -4,7 +4,7 @@ import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 def get_nvd_cves():
@@ -31,97 +31,91 @@ def get_nvd_cves():
         return cves
     return []
 
-def get_mitre_cves():
-    url = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/releases/latest.json"
-    response = requests.get(url)
+def get_bleeping_computer_articles():
+    feed_url = "https://www.bleepingcomputer.com/feed/"
+    feed = feedparser.parse(feed_url)
     
-    if response.status_code != 200:
-        return []
-    
-    data = response.json()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    
-    cves = [
+    articles = [
         {
-            "id": entry.get("cveID", "N/A"),
-            "description": entry.get("containers", {}).get("cna", {}).get("descriptions", [{}])[0].get("value", "No description"),
-            "link": f"https://www.cve.org/CVERecord?id={entry.get('cveID', 'N/A')}"
+            "title": entry.get("title", "No title"),
+            "link": entry.get("link", "#")
         }
-        for entry in data.get("CVE_Items", [])
-        if entry.get("dateUpdated", "").startswith(today)
+        for entry in feed.entries if "vulnerability" in entry.get("title", "").lower()
     ]
     
-    return cves
+    return articles
 
-def get_cisa_known_exploited_vulnerabilities():
-    url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-    response = requests.get(url)
+def format_email_content(nvd, mitre, cisa, articles):
+    def format_section(title, items, is_html=False):
+        if not items:
+            return f"<p><b>{title}:</b> No news today.</p>\n\n" if is_html else f"{title}: No news today.\n\n"
+        
+        if is_html:
+            return f"<h3>{title}:</h3><ul>" + "".join([
+                f"<li><b>{item.get('id', 'N/A')}</b> - {item.get('description', 'No description')} (CVSS: <b>{item.get('cvss', 'N/A')}</b>) - <a href='{item.get('link', '#')}'>More Info</a></li>"
+                for item in items]) + "</ul>\n\n"
+        else:
+            return f"{title}:\n" + "\n".join([
+                f"- {item.get('id', 'N/A')} - {item.get('description', 'No description')} (CVSS: {item.get('cvss', 'N/A')}) ({item.get('link', '#')})"
+                for item in items]) + "\n\n"
     
-    if response.status_code != 200:
-        return []
+    def format_articles(articles, is_html=False):
+        if not articles:
+            return "<p><b>Bleeping Computer Articles:</b> No relevant articles today.</p>\n\n" if is_html else "Bleeping Computer Articles: No relevant articles today.\n\n"
+        
+        if is_html:
+            return "<h3>Bleeping Computer Articles:</h3><ul>" + "".join([
+                f"<li><a href='{article.get('link', '#')}'>{article.get('title', 'No title')}</a></li>"
+                for article in articles]) + "</ul>\n\n"
+        else:
+            return "Bleeping Computer Articles:\n" + "\n".join([
+                f"- {article.get('title', 'No title')} ({article.get('link', '#')})"
+                for article in articles]) + "\n\n"
     
-    data = response.json()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    content_html = """
+    <html>
+    <body>
+    <h2>Daily Cybersecurity Threat Report</h2>
+    <hr>
+    """
+    content_html += format_section("NVD CVEs", nvd, is_html=True)
+    content_html += format_section("MITRE CVEs", mitre, is_html=True)
+    content_html += format_section("CISA Exploited CVEs", cisa, is_html=True)
+    content_html += format_articles(articles, is_html=True)
+    content_html += "</body></html>"
     
-    vulnerabilities = [
-        {
-            "cve": item.get("cveID", "N/A"),
-            "vendor": item.get("vendorProject", "N/A"),
-            "product": item.get("product", "N/A"),
-            "description": item.get("shortDescription", "No description"),
-            "date_added": item.get("dateAdded", "N/A"),
-            "link": f"https://www.cve.org/CVERecord?id={item.get('cveID', 'N/A')}"
-        }
-        for item in data.get("vulnerabilities", [])
-        if item.get("dateAdded", "").startswith(today)
-    ]
-    
-    return vulnerabilities
+    return content_html
 
 def send_email(subject, body, recipient):
-    sender_email = "send@mail.com"  # CHANGE ME
-    sender_password = "password"  # CHANGE ME
+    sender_email = "SENDER_EMAIL" #change sender email
+    sender_password = "SENDER_PASSWORD" #change your password
     
+    sent_from = sender_email
+    to = [recipient]
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = recipient
     msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
+    msg.attach(MIMEText(body, 'html'))
     
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
+        server = smtplib.SMTP_SSL('smtp.zoho.com', 465) #change your smtp config
         server.login(sender_email, sender_password)
-        server.sendmail(sender_email, recipient, msg.as_string())
+        server.sendmail(sent_from, to, msg.as_string())
         server.quit()
-        print("Email send")
+        print("Email envoyé avec succès!")
     except Exception as e:
-        print(f"Cannot send the email: {e}")
-
-
-def format_email_content(nvd, mitre, cisa):
-    def format_section(title, items):
-        if not items:
-            return f"{title}: No news today.\n\n"
-        return f"{title}:\n" + "\n".join([f"- {item.get('id', 'N/A')} - {item.get('description', 'No description')} (CVSS: {item.get('cvss', 'N/A')}) ({item.get('link', '#')})" for item in items]) + "\n\n"
-    
-    content = """
-    Daily Cybersecurity Threat Report
-    ==================================
-    
-    """
-    content += format_section("NVD CVEs", nvd)
-    content += format_section("MITRE CVEs", mitre)
-    content += format_section("CISA Exploited CVEs", cisa)
-    
+        print(f"Erreur lors de l'envoi de l'email: {e}")
 
 def main():
     nvd_cves = get_nvd_cves()
     mitre_cves = get_mitre_cves()
     cisa_cves = get_cisa_known_exploited_vulnerabilities()
+    articles = get_bleeping_computer_articles()
     
-    email_content = format_email_content(nvd_cves, mitre_cves, cisa_cves)
-    send_email("Daily Cybersecurity Report", email_content, "CHANGE_ME") #recepient email
+    email_content = format_email_content(nvd_cves, mitre_cves, cisa_cves, articles)
+    send_email("Daily Cybersecurity Report", email_content, "YOUR_EMAIL") #add your email
     
 if __name__ == "__main__":
     main()
+
