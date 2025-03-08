@@ -1,12 +1,11 @@
 
 import requests
-import feedparser
 import json
 import smtplib
+import feedparser
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta, timezone
-from bs4 import BeautifulSoup
 
 def get_nvd_cves():
     base_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
@@ -32,10 +31,104 @@ def get_nvd_cves():
         return cves
     return []
 
-def send_email(subject, body, recipient):
-    sender_email = "CHANGE_ME"
-    sender_password = "CHANGE_ME"  # Remplace par ton mot de passe sécurisé
+def get_mitre_cves():
+    url = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/releases/latest.json"
+    response = requests.get(url)
     
+    if response.status_code != 200:
+        return []
+    
+    data = response.json()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    
+    cves = [
+        {
+            "id": entry.get("cveID", "N/A"),
+            "description": entry.get("containers", {}).get("cna", {}).get("descriptions", [{}])[0].get("value", "No description"),
+            "link": f"https://www.cve.org/CVERecord?id={entry.get('cveID', 'N/A')}"
+        }
+        for entry in data.get("CVE_Items", [])
+        if entry.get("dateUpdated", "").startswith(today)
+    ]
+    
+    return cves
+
+def get_cisa_known_exploited_vulnerabilities():
+    url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    response = requests.get(url)
+    
+    if response.status_code != 200:
+        return []
+    
+    data = response.json()
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    
+    vulnerabilities = [
+        {
+            "id": item.get("cveID", "N/A"),
+            "vendor": item.get("vendorProject", "N/A"),
+            "product": item.get("product", "N/A"),
+            "description": item.get("shortDescription", "No description"),
+            "date_added": item.get("dateAdded", "N/A"),
+            "link": f"https://www.cve.org/CVERecord?id={item.get('cveID', 'N/A')}"
+        }
+        for item in data.get("vulnerabilities", [])
+        if item.get("dateAdded", "").startswith(today)
+    ]
+    
+    return vulnerabilities
+
+
+def get_bleeping_computer_articles():
+    feed_url = "https://www.bleepingcomputer.com/feed/"
+    feed = feedparser.parse(feed_url)
+    
+    articles = [
+        {
+            "title": entry.get("title", "No title"),
+            "description": entry.get("summary", ""),
+            "link": entry.get("link", "#")
+        }
+        for entry in feed.entries if "vulnerability" in entry.get("title", "").lower() or "vulnerability" in entry.get("summary", "").lower()
+    ]
+    
+    return articles
+
+def format_email_content(nvd, mitre, cisa, articles):
+    email_content = """
+    <html>
+    <body>
+        <h2>Daily Cybersecurity Threat Report</h2>
+        <hr>
+        <h3>NVD CVEs</h3>
+        <ul>
+    """
+    for cve in nvd:
+        email_content += f"<li><b>{cve['id']}</b> - {cve['description']} (CVSS: <b>{cve['cvss']}</b>) - <a href='{cve['link']}'>Details</a></li>"
+    
+    email_content += "</ul><h3>MITRE CVEs</h3><ul>"
+    for cve in mitre:
+        email_content += f"<li><b>{cve['id']}</b> - {cve['description']} - <a href='{cve['link']}'>Details</a></li>"
+    
+    email_content += "</ul><h3>CISA Exploited CVEs</h3><ul>"
+    for vuln in cisa:
+        email_content += f"<li><b>{vuln['id']}</b> - {vuln['description']} - <a href='{vuln['link']}'>Details</a></li>"
+    
+    email_content += "</ul><h3>Bleeping Computer Articles</h3><ul>"
+    for article in articles:
+        email_content += f"<li><a href='{article['link']}'><b>{article['title']}</b></a><br>{article['description']}</li>"
+    
+    email_content += """
+        </ul>
+    </body>
+    </html>
+    """
+    return email_content
+
+
+def send_email(subject, body, recipient):
+    sender_email = "CHANGE_ME" #add your email account
+    sender_password = "CHANGE_ME"  # add your email account password
     
     msg = MIMEMultipart()
     msg['From'] = sender_email
@@ -44,54 +137,13 @@ def send_email(subject, body, recipient):
     msg.attach(MIMEText(body, 'html'))
     
     try:
-        server = smtplib.SMTP_SSL('smtp.zoho.com', 465)
+        server = smtplib.SMTP_SSL("CHANGE_ME", 465)  # add SMTP configuration
         server.login(sender_email, sender_password)
         server.sendmail(sender_email, recipient, msg.as_string())
         server.quit()
         print("Email envoyé avec succès!")
     except Exception as e:
         print(f"Erreur lors de l'envoi de l'email: {e}")
-
-def format_email_content(nvd, mitre, cisa, articles):
-    def format_section(title, items, is_html=False):
-        if not items:
-            return f"<p><b>{title}:</b> No news today.</p>\n\n" if is_html else f"{title}: No news today.\n\n"
-        
-        if is_html:
-            return f"<h3>{title}:</h3><ul>" + "".join([
-                f"<li><b>{item.get('id', 'N/A')}</b> - {item.get('description', 'No description')} (CVSS: <b>{item.get('cvss', 'N/A')}</b>) - <a href='{item.get('link', '#')}'>More Info</a></li>"
-                for item in items]) + "</ul>\n\n"
-        else:
-            return f"{title}:\n" + "\n".join([
-                f"- {item.get('id', 'N/A')} - {item.get('description', 'No description')} (CVSS: {item.get('cvss', 'N/A')}) ({item.get('link', '#')})"
-                for item in items]) + "\n\n"
-    
-    def format_articles(articles, is_html=False):
-        if not articles:
-            return "<p><b>Bleeping Computer Articles:</b> No relevant articles today.</p>\n\n" if is_html else "Bleeping Computer Articles: No relevant articles today.\n\n"
-        
-        if is_html:
-            return "<h3>Bleeping Computer Articles:</h3><ul>" + "".join([
-                f"<li><a href='{article.get('link', '#')}'>{article.get('title', 'No title')}</a></li>"
-                for article in articles]) + "</ul>\n\n"
-        else:
-            return "Bleeping Computer Articles:\n" + "\n".join([
-                f"- {article.get('title', 'No title')} ({article.get('link', '#')})"
-                for article in articles]) + "\n\n"
-    
-    content_html = """
-    <html>
-    <body>
-    <h2>Daily Cybersecurity Threat Report</h2>
-    <hr>
-    """
-    content_html += format_section("NVD CVEs", nvd, is_html=True)
-    content_html += format_section("MITRE CVEs", mitre, is_html=True)
-    content_html += format_section("CISA Exploited CVEs", cisa, is_html=True)
-    content_html += format_articles(articles, is_html=True)
-    content_html += "</body></html>"
-    
-    return content_html
 
 def main():
     nvd_cves = get_nvd_cves()
@@ -100,7 +152,14 @@ def main():
     articles = get_bleeping_computer_articles()
     
     email_content = format_email_content(nvd_cves, mitre_cves, cisa_cves, articles)
-    send_email("Daily Cybersecurity Report", email_content, "CHANGE_ME")
+    send_email("Daily Cybersecurity Report", email_content, "CHANGE_ME") #add recipient email
     
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
